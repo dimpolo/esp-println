@@ -67,6 +67,9 @@ mod serial_jtag_printer {
     #[cfg(feature = "esp32s3")]
     const SERIAL_JTAG_CONF_REG: usize = 0x6003_8004;
 
+    /// TODO
+    const WAIT_CYCLES: u32 = 100_000;
+
     #[cfg(any(
         feature = "esp32c3",
         feature = "esp32c6",
@@ -79,17 +82,25 @@ mod serial_jtag_printer {
                 let fifo = SERIAL_JTAG_FIFO_REG as *mut u32;
                 let conf = SERIAL_JTAG_CONF_REG as *mut u32;
 
-                // todo 64 byte chunks max
-                for chunk in bytes.chunks(32) {
-                    unsafe {
+                unsafe {
+                    if conf.read_volatile() & 0b011 == 0b000 {
+                        // FIFO full, should only happen when USB disconnected
+                        return;
+                    }
+
+                    // todo 64 byte chunks max
+                    'outer: for chunk in bytes.chunks(64) {
                         for &b in chunk {
                             fifo.write_volatile(b as u32);
                         }
                         conf.write_volatile(0b001);
 
-                        while conf.read_volatile() & 0b011 == 0b000 {
-                            // wait
+                        for _ in 0..WAIT_CYCLES {
+                            if conf.read_volatile() & 0b011 != 0b000 {
+                                continue 'outer;
+                            }
                         }
+                        return; // timeout
                     }
                 }
             })
